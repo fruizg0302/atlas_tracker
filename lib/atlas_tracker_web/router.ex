@@ -17,7 +17,7 @@ defmodule AtlasTrackerWeb.Router do
   scope "/", AtlasTrackerWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", TrackerLive
   end
 
   # Other scopes may use custom stacks.
