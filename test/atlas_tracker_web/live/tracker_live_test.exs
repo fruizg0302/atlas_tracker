@@ -5,10 +5,11 @@ defmodule AtlasTrackerWeb.TrackerLiveTest do
 
   @moduletag timeout: 60_000
 
-  test "renders the tracker page", %{conn: conn} do
+  test "renders the tracker page with 3D canvas", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/")
     assert html =~ "Atlas Tracker"
     assert html =~ "Fetch 3I/ATLAS"
     assert html =~ "Evaluate"
+    assert html =~ "phx-hook=\"SolarSystem\""
   end
 end

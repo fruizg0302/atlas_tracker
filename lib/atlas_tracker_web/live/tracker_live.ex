@@ -1,15 +1,17 @@
 defmodule AtlasTrackerWeb.TrackerLive do
   use AtlasTrackerWeb, :live_view
 
+  alias AtlasTracker.StateVectorParser
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
       |> assign(:wolfram_input, "40 + 2")
       |> assign(:wolfram_result, nil)
-      |> assign(:horizons_result, nil)
       |> assign(:loading, nil)
       |> assign(:error, nil)
+      |> assign(:trajectory_loaded, false)
 
     {:ok, socket}
   end
@@ -17,26 +19,26 @@ defmodule AtlasTrackerWeb.TrackerLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto p-6">
+    <div class="max-w-6xl mx-auto p-6">
       <h1 class="text-3xl font-bold mb-8">Atlas Tracker</h1>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <%!-- Horizons Panel --%>
-        <div class="border rounded-lg p-6">
-          <h2 class="text-xl font-semibold mb-4">JPL Horizons</h2>
-          <p class="text-sm text-gray-600 mb-4">
-            Fetch 3I/ATLAS state vectors (July 2025 – June 2026, weekly)
-          </p>
-          <button
-            phx-click="fetch_horizons"
-            disabled={@loading == :horizons}
-            class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
-          >
-            <%= if @loading == :horizons, do: "Fetching...", else: "Fetch 3I/ATLAS" %>
-          </button>
-
-          <%= if @horizons_result do %>
-            <pre class="mt-4 p-4 bg-gray-50 rounded text-xs overflow-auto max-h-96"><%= @horizons_result %></pre>
+        <%!-- 3D Solar System Panel --%>
+        <div class="border rounded-lg p-4">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-xl font-semibold">3I/ATLAS Trajectory</h2>
+            <button
+              phx-click="fetch_horizons"
+              disabled={@loading == :horizons}
+              class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
+            >
+              <%= if @loading == :horizons, do: "Fetching...", else: "Fetch 3I/ATLAS" %>
+            </button>
+          </div>
+          <div id="solar-system" phx-hook="SolarSystem" phx-update="ignore" class="w-full" style="min-height: 500px;">
+          </div>
+          <%= if @trajectory_loaded do %>
+            <p class="text-xs text-gray-500 mt-2">Drag to rotate, scroll to zoom, right-click to pan</p>
           <% end %>
         </div>
 
@@ -108,8 +110,23 @@ defmodule AtlasTrackerWeb.TrackerLive do
   end
 
   @impl true
-  def handle_info({:horizons_result, {:ok, %{"result" => result}}}, socket) do
-    {:noreply, socket |> assign(:horizons_result, result) |> assign(:loading, nil)}
+  def handle_info({:horizons_result, {:ok, %{"result" => result_text}}}, socket) do
+    case StateVectorParser.parse(result_text) do
+      {:ok, positions} ->
+        socket =
+          socket
+          |> assign(:loading, nil)
+          |> assign(:trajectory_loaded, true)
+          |> push_event("trajectory_data", %{positions: positions})
+
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        {:noreply,
+         socket
+         |> assign(:error, "Failed to parse trajectory data")
+         |> assign(:loading, nil)}
+    end
   end
 
   def handle_info({:horizons_result, {:error, reason}}, socket) do
