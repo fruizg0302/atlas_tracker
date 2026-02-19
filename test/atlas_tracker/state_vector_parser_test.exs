@@ -37,4 +37,28 @@ defmodule AtlasTracker.StateVectorParserTest do
     result = "$$SOE\n$$EOE"
     assert {:ok, []} = StateVectorParser.parse(result)
   end
+
+  @tag :horizons
+  test "parses real JPL Horizons response" do
+    {:ok, %{"result" => result_text}} =
+      AtlasTracker.HorizonsClient.fetch_state_vectors(
+        "C/2025 N1",
+        "2025-07-01",
+        "2026-06-01",
+        "7d"
+      )
+
+    {:ok, positions} = AtlasTracker.StateVectorParser.parse(result_text)
+
+    # ~52 weeks of weekly data
+    assert length(positions) >= 48
+    assert length(positions) <= 55
+
+    # All positions should be reasonable AU values (within 50 AU of Sun)
+    for pos <- positions do
+      distance = :math.sqrt(pos.x * pos.x + pos.y * pos.y + pos.z * pos.z)
+      assert distance < 50.0, "Position #{inspect(pos)} is unreasonably far: #{distance} AU"
+      assert distance > 0.1, "Position #{inspect(pos)} is unreasonably close: #{distance} AU"
+    end
+  end
 end
