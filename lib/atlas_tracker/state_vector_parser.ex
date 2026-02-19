@@ -49,9 +49,9 @@ defmodule AtlasTracker.StateVectorParser do
   end
 
   defp extract_xyz(chunk) do
-    x_regex = ~r/X\s*=\s*([^\s]+)/
-    y_regex = ~r/Y\s*=\s*([^\s]+)/
-    z_regex = ~r/Z\s*=\s*([^\s]+)/
+    x_regex = ~r/(?<!\w)X\s*=\s*([^\s]+)/
+    y_regex = ~r/(?<!\w)Y\s*=\s*([^\s]+)/
+    z_regex = ~r/(?<!\w)Z\s*=\s*([^\s]+)/
 
     with [_, x_str] <- Regex.run(x_regex, chunk),
          [_, y_str] <- Regex.run(y_regex, chunk),
