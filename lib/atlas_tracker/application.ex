@@ -9,11 +9,9 @@ defmodule AtlasTracker.Application do
   def start(_type, _args) do
     children = [
       AtlasTrackerWeb.Telemetry,
+      {AtlasTracker.KernelWorker, name: AtlasTracker.KernelWorker},
       {DNSCluster, query: Application.get_env(:atlas_tracker, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: AtlasTracker.PubSub},
-      # Start a worker by calling: AtlasTracker.Worker.start_link(arg)
-      # {AtlasTracker.Worker, arg},
-      # Start to serve requests, typically the last entry
       AtlasTrackerWeb.Endpoint
     ]
 

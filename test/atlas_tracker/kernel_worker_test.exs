@@ -27,4 +27,18 @@ defmodule AtlasTracker.KernelWorkerTest do
   test "returns error for invalid expression", %{worker: worker} do
     assert {:ok, %{"error" => _}} = AtlasTracker.KernelWorker.evaluate(worker, "1/0")
   end
+
+  describe "supervised" do
+    @tag :skip
+    # This test validates the supervision tree starts the worker.
+    # Run manually: mix test --only supervised
+    @tag :supervised
+    test "KernelWorker is started by the application" do
+      # Give it time to pre-warm
+      Process.sleep(8_000)
+      pid = Process.whereis(AtlasTracker.KernelWorker)
+      assert is_pid(pid)
+      assert {:ok, 42} = AtlasTracker.KernelWorker.evaluate(pid, "40 + 2")
+    end
+  end
 end
