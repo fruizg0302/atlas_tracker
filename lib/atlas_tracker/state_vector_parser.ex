@@ -52,6 +52,7 @@ defmodule AtlasTracker.StateVectorParser do
     x_regex = ~r/(?<!\w)X\s*=\s*([^\s]+)/
     y_regex = ~r/(?<!\w)Y\s*=\s*([^\s]+)/
     z_regex = ~r/(?<!\w)Z\s*=\s*([^\s]+)/
+    date_regex = ~r/A\.D\.\s+(\d{4})-([A-Za-z]+)-(\d{2})/
 
     with [_, x_str] <- Regex.run(x_regex, chunk),
          [_, y_str] <- Regex.run(y_regex, chunk),
@@ -59,9 +60,36 @@ defmodule AtlasTracker.StateVectorParser do
          {x, _} <- Float.parse(x_str),
          {y, _} <- Float.parse(y_str),
          {z, _} <- Float.parse(z_str) do
-      [%{x: x / @km_per_au, y: y / @km_per_au, z: z / @km_per_au}]
+      date = extract_date(chunk, date_regex)
+
+      [
+        %{x: x / @km_per_au, y: y / @km_per_au, z: z / @km_per_au}
+        |> maybe_put_date(date)
+      ]
     else
       _ -> []
     end
   end
+
+  defp extract_date(chunk, regex) do
+    case Regex.run(regex, chunk) do
+      [_, year, month_str, day] ->
+        month = month_to_number(month_str)
+        "#{year}-#{String.pad_leading(to_string(month), 2, "0")}-#{day}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp maybe_put_date(map, nil), do: map
+  defp maybe_put_date(map, date), do: Map.put(map, :date, date)
+
+  @months %{
+    "Jan" => 1, "Feb" => 2, "Mar" => 3, "Apr" => 4,
+    "May" => 5, "Jun" => 6, "Jul" => 7, "Aug" => 8,
+    "Sep" => 9, "Oct" => 10, "Nov" => 11, "Dec" => 12
+  }
+
+  defp month_to_number(str), do: Map.get(@months, str, 1)
 end

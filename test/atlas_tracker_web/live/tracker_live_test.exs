@@ -8,7 +8,7 @@ defmodule AtlasTrackerWeb.TrackerLiveTest do
   test "renders the tracker page with 3D canvas", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/")
     assert html =~ "Atlas Tracker"
-    assert html =~ "Fetch 3I/ATLAS"
+    assert html =~ "3I/ATLAS Trajectory"
     assert html =~ "Evaluate"
     assert html =~ "phx-hook=\"SolarSystem\""
   end
