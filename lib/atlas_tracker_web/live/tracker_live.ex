@@ -3,6 +3,13 @@ defmodule AtlasTrackerWeb.TrackerLive do
 
   alias AtlasTracker.StateVectorParser
 
+  # Interstellar objects to fetch from JPL Horizons
+  @interstellar_objects [
+    %{id: "3i_atlas",   object: "C/2025 N1",  start: "2025-07-01", stop: "2026-06-01", step: "7d", label: "3I/ATLAS"},
+    %{id: "1i_oumuamua", object: "1I",         start: "2017-06-01", stop: "2018-06-01", step: "7d", label: "1I/'Oumuamua"},
+    %{id: "2i_borisov",  object: "2I",         start: "2019-06-01", stop: "2020-06-01", step: "7d", label: "2I/Borisov"}
+  ]
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
@@ -11,25 +18,27 @@ defmodule AtlasTrackerWeb.TrackerLive do
       |> assign(:wolfram_result, nil)
       |> assign(:loading, nil)
       |> assign(:error, nil)
-      |> assign(:trajectory_loaded, false)
+      |> assign(:trajectories_pending, 0)
 
-    # Auto-fetch 3I/ATLAS trajectory on connected mount (avoids double-fetch)
+    # Auto-fetch all interstellar trajectories on connected mount
     if connected?(socket) do
       pid = self()
 
-      Task.start(fn ->
-        result =
-          AtlasTracker.HorizonsClient.fetch_state_vectors(
-            "C/2025 N1",
-            "2025-07-01",
-            "2026-06-01",
-            "7d"
-          )
+      for obj <- @interstellar_objects do
+        Task.start(fn ->
+          result =
+            AtlasTracker.HorizonsClient.fetch_state_vectors(
+              obj.object,
+              obj.start,
+              obj.stop,
+              obj.step
+            )
 
-        send(pid, {:horizons_result, result})
-      end)
+          send(pid, {:trajectory_result, obj.id, obj.label, result})
+        end)
+      end
 
-      {:ok, assign(socket, :loading, :horizons)}
+      {:ok, assign(socket, loading: :horizons, trajectories_pending: length(@interstellar_objects))}
     else
       {:ok, socket}
     end
@@ -44,9 +53,9 @@ defmodule AtlasTrackerWeb.TrackerLive do
       <%!-- Full-width 3D Solar System --%>
       <div class="border rounded-lg p-4 mb-8">
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-xl font-semibold">3I/ATLAS Trajectory</h2>
+          <h2 class="text-xl font-semibold">Interstellar Visitors</h2>
           <%= if @loading == :horizons do %>
-            <span class="text-sm text-gray-400 animate-pulse">Loading trajectory...</span>
+            <span class="text-sm text-gray-400 animate-pulse">Loading trajectories (<%= @trajectories_pending %> remaining)...</span>
           <% end %>
         </div>
         <div id="solar-system" phx-hook="SolarSystem" phx-update="ignore" class="w-full">
@@ -101,30 +110,31 @@ defmodule AtlasTrackerWeb.TrackerLive do
   end
 
   @impl true
-  def handle_info({:horizons_result, {:ok, %{"result" => result_text}}}, socket) do
-    case StateVectorParser.parse(result_text) do
-      {:ok, positions} ->
-        socket =
+  def handle_info({:trajectory_result, id, label, {:ok, %{"result" => result_text}}}, socket) do
+    pending = socket.assigns.trajectories_pending - 1
+
+    socket =
+      case StateVectorParser.parse(result_text) do
+        {:ok, positions} ->
           socket
-          |> assign(:loading, nil)
-          |> assign(:trajectory_loaded, true)
-          |> push_event("trajectory_data", %{positions: positions})
+          |> push_event("trajectory_data", %{id: id, label: label, positions: positions})
 
-        {:noreply, socket}
+        {:error, _reason} ->
+          assign(socket, :error, "Failed to parse #{label} trajectory data")
+      end
 
-      {:error, _reason} ->
-        {:noreply,
-         socket
-         |> assign(:error, "Failed to parse trajectory data")
-         |> assign(:loading, nil)}
-    end
+    loading = if pending <= 0, do: nil, else: :horizons
+    {:noreply, assign(socket, loading: loading, trajectories_pending: pending)}
   end
 
-  def handle_info({:horizons_result, {:error, reason}}, socket) do
+  def handle_info({:trajectory_result, _id, label, {:error, reason}}, socket) do
+    pending = socket.assigns.trajectories_pending - 1
+    loading = if pending <= 0, do: nil, else: :horizons
+
     {:noreply,
      socket
-     |> assign(:error, "Horizons error: #{inspect(reason)}")
-     |> assign(:loading, nil)}
+     |> assign(:error, "Horizons error for #{label}: #{inspect(reason)}")
+     |> assign(loading: loading, trajectories_pending: pending)}
   end
 
   def handle_info({:wolfram_result, {:ok, result}}, socket) do

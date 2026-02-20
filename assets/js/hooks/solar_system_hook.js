@@ -387,61 +387,55 @@ const SolarSystem = {
       this._planetLabels.push(label)
     }
 
-    // --- 3I/ATLAS trajectory ---
-    this._trajectoryLine = null
-    this._trajectoryPositions = null  // raw position data with dates
-    this._atlasMarker = null
-    this._atlasLabel = null
+    // --- Interstellar object trajectories ---
+    // Each entry: { line, positions, marker, label, color }
+    this._trajectories = {}
 
-    // Create the ATLAS marker (hidden until data arrives)
-    const atlasGeo = new THREE.SphereGeometry(0.35, 16, 12)
-    const atlasMat = new THREE.MeshBasicMaterial({ color: 0xff5555 })
-    this._atlasMarker = new THREE.Mesh(atlasGeo, atlasMat)
-    this._atlasMarker.visible = false
-    this._scene.add(this._atlasMarker)
+    // Color map for each interstellar object
+    this._trajectoryColors = {
+      "3i_atlas":    { hex: 0xff5555, css: "#ff5555" },
+      "1i_oumuamua": { hex: 0x55ddff, css: "#55ddff" },
+      "2i_borisov":  { hex: 0xffaa33, css: "#ffaa33" },
+    }
 
-    this._atlasLabel = createTextLabel("3I/ATLAS", "#ff5555", 1.3)
-    this._atlasLabel.visible = false
-    this._scene.add(this._atlasLabel)
-
-    // --- Listen for trajectory data from LiveView ---
-    this.handleEvent("trajectory_data", ({ positions }) => {
-      this._drawTrajectory(positions)
-      this._trajectoryPositions = positions
-      // Now that we have data, update the scene to the current slider date
-      this._updateScene(this._simDate)
+    // --- Listen for trajectory data from LiveView (called per object) ---
+    this.handleEvent("trajectory_data", ({ id, label, positions }) => {
+      this._addTrajectory(id, label, positions)
+      this._updateScene(this._simProgress)
     })
 
     // --- Time simulation state ---
-    this._simDate = Date.now()  // current date in ms
+    // Progress is 0..1 normalized across each object's own time range.
+    // For planets and the date display, we map progress to 3I/ATLAS's date range.
+    this._simProgress = this._todayProgress()
     this._playing = false
-    this._playSpeed = 1  // days per real second
+    this._playSpeed = 5  // progress units per real second (in days of 3I range)
 
     // --- Time controls UI ---
     this._buildTimeControls(container)
 
     // Position everything to today initially
-    this._updateScene(this._simDate)
+    this._updateScene(this._simProgress)
 
     // --- Animation loop ---
     this._lastFrameTime = performance.now()
     this._animationId = null
+    const trajDurationDays = (TRAJ_END - TRAJ_START) / 86400000
     const animate = (now) => {
       this._animationId = requestAnimationFrame(animate)
 
       if (this._playing) {
         const dtSec = (now - this._lastFrameTime) / 1000
-        const advanceMs = dtSec * this._playSpeed * 86400000 // days -> ms
-        this._simDate = Math.min(TRAJ_END, Math.max(TRAJ_START, this._simDate + advanceMs))
+        // Advance progress: playSpeed is in days/sec relative to 3I range
+        const progressStep = (dtSec * this._playSpeed) / trajDurationDays
+        this._simProgress += progressStep
 
-        // Loop back to start if we reach the end
-        if (this._simDate >= TRAJ_END) {
-          this._simDate = TRAJ_START
-        }
+        // Loop back to start
+        if (this._simProgress >= 1) this._simProgress = 0
 
-        this._slider.value = this._simDate
-        this._dateDisplay.textContent = formatDate(this._simDate)
-        this._updateScene(this._simDate)
+        this._slider.value = this._simProgress * 1000
+        this._dateDisplay.textContent = formatDate(this._progressToDate(this._simProgress))
+        this._updateScene(this._simProgress)
       }
 
       this._lastFrameTime = now
@@ -459,6 +453,17 @@ const SolarSystem = {
       this._renderer.setSize(w, h)
     })
     this._resizeObserver.observe(this._canvasWrap)
+  },
+
+  /** Convert normalized progress (0..1) to a date in 3I/ATLAS range. */
+  _progressToDate(progress) {
+    return TRAJ_START + progress * (TRAJ_END - TRAJ_START)
+  },
+
+  /** Compute today's progress within the 3I/ATLAS range. */
+  _todayProgress() {
+    const now = Date.now()
+    return Math.max(0, Math.min(1, (now - TRAJ_START) / (TRAJ_END - TRAJ_START)))
   },
 
   /** Build the time slider + play/pause + speed controls below the canvas. */
@@ -493,24 +498,24 @@ const SolarSystem = {
     this._playSpeed = 5
     bar.appendChild(speedSel)
 
-    // Date slider
+    // Progress slider (0..1000 for precision)
     const slider = document.createElement("input")
     slider.type = "range"
-    slider.min = TRAJ_START
-    slider.max = TRAJ_END
-    slider.value = Math.min(Math.max(Date.now(), TRAJ_START), TRAJ_END)
+    slider.min = 0
+    slider.max = 1000
+    slider.value = Math.round(this._simProgress * 1000)
     slider.style.cssText = "flex:1; accent-color:#ff5555; cursor:pointer;"
     slider.addEventListener("input", () => {
-      this._simDate = Number(slider.value)
-      this._dateDisplay.textContent = formatDate(this._simDate)
-      this._updateScene(this._simDate)
+      this._simProgress = Number(slider.value) / 1000
+      this._dateDisplay.textContent = formatDate(this._progressToDate(this._simProgress))
+      this._updateScene(this._simProgress)
     })
     this._slider = slider
     bar.appendChild(slider)
 
-    // Date display
+    // Date display (shows 3I/ATLAS date)
     const dateDisp = document.createElement("span")
-    dateDisp.textContent = formatDate(this._simDate)
+    dateDisp.textContent = formatDate(this._progressToDate(this._simProgress))
     dateDisp.style.cssText = "min-width:90px; text-align:right;"
     this._dateDisplay = dateDisp
     bar.appendChild(dateDisp)
@@ -520,18 +525,21 @@ const SolarSystem = {
     todayBtn.textContent = "Today"
     todayBtn.style.cssText = "background:#333; color:#fff; border:1px solid #555; border-radius:4px; padding:4px 8px; cursor:pointer; font-size:12px;"
     todayBtn.addEventListener("click", () => {
-      this._simDate = Math.min(Math.max(Date.now(), TRAJ_START), TRAJ_END)
-      this._slider.value = this._simDate
-      this._dateDisplay.textContent = formatDate(this._simDate)
-      this._updateScene(this._simDate)
+      this._simProgress = this._todayProgress()
+      this._slider.value = Math.round(this._simProgress * 1000)
+      this._dateDisplay.textContent = formatDate(this._progressToDate(this._simProgress))
+      this._updateScene(this._simProgress)
     })
     bar.appendChild(todayBtn)
 
     container.appendChild(bar)
   },
 
-  /** Update all object positions for a given simulation date. */
-  _updateScene(dateMs) {
+  /** Update all object positions for a given normalized progress (0..1). */
+  _updateScene(progress) {
+    // Map progress to 3I/ATLAS date for planet positions
+    const dateMs = this._progressToDate(progress)
+
     // Update planet positions
     for (let idx = 0; idx < this._planetMeshes.length; idx++) {
       const mesh = this._planetMeshes[idx]
@@ -543,15 +551,22 @@ const SolarSystem = {
       label.position.y += mesh.userData.labelOffset
     }
 
-    // Update 3I/ATLAS position from trajectory data
-    if (this._trajectoryPositions) {
-      const pos = interpolateTrajectory(this._trajectoryPositions, dateMs)
+    // Update all interstellar objects using normalized progress into their own date ranges
+    for (const [id, traj] of Object.entries(this._trajectories)) {
+      if (!traj.positions || traj.positions.length === 0) continue
+
+      // Map progress to this object's own date range
+      const firstDate = new Date(traj.positions[0].date).getTime()
+      const lastDate = new Date(traj.positions[traj.positions.length - 1].date).getTime()
+      const objDateMs = firstDate + progress * (lastDate - firstDate)
+
+      const pos = interpolateTrajectory(traj.positions, objDateMs)
       if (pos) {
-        this._atlasMarker.visible = true
-        this._atlasMarker.position.copy(pos)
-        this._atlasLabel.visible = true
-        this._atlasLabel.position.copy(pos)
-        this._atlasLabel.position.y += 1.0
+        traj.marker.visible = true
+        traj.marker.position.copy(pos)
+        traj.label.visible = true
+        traj.label.position.copy(pos)
+        traj.label.position.y += 1.0
       }
     }
   },
@@ -568,25 +583,41 @@ const SolarSystem = {
     if (this._resizeObserver) this._resizeObserver.disconnect()
   },
 
-  /** Draw the full trajectory path as a red line. */
-  _drawTrajectory(positions) {
-    if (this._trajectoryLine) {
-      this._scene.remove(this._trajectoryLine)
-      this._trajectoryLine.geometry.dispose()
-      this._trajectoryLine.material.dispose()
-      this._trajectoryLine = null
+  /** Add a trajectory for an interstellar object. */
+  _addTrajectory(id, label, positions) {
+    // Remove old trajectory for this id if present
+    const old = this._trajectories[id]
+    if (old) {
+      if (old.line) { this._scene.remove(old.line); old.line.geometry.dispose(); old.line.material.dispose() }
+      if (old.marker) this._scene.remove(old.marker)
+      if (old.label) this._scene.remove(old.label)
     }
 
     if (!positions || positions.length === 0) return
 
+    const colors = this._trajectoryColors[id] || { hex: 0xffffff, css: "#ffffff" }
+
+    // Draw the orbit path
     const points = positions.map(
       (p) => new THREE.Vector3(p.x * AU_SCALE, p.z * AU_SCALE, p.y * AU_SCALE)
     )
-
     const geometry = new THREE.BufferGeometry().setFromPoints(points)
-    const material = new THREE.LineBasicMaterial({ color: 0xff3333, linewidth: 2 })
-    this._trajectoryLine = new THREE.Line(geometry, material)
-    this._scene.add(this._trajectoryLine)
+    const material = new THREE.LineBasicMaterial({ color: colors.hex, linewidth: 2 })
+    const line = new THREE.Line(geometry, material)
+    this._scene.add(line)
+
+    // Animated marker for this object
+    const markerGeo = new THREE.SphereGeometry(0.35, 16, 12)
+    const markerMat = new THREE.MeshBasicMaterial({ color: colors.hex })
+    const marker = new THREE.Mesh(markerGeo, markerMat)
+    marker.visible = false
+    this._scene.add(marker)
+
+    const labelSprite = createTextLabel(label, colors.css, 1.2)
+    labelSprite.visible = false
+    this._scene.add(labelSprite)
+
+    this._trajectories[id] = { line, positions, marker, label: labelSprite }
   },
 }
 
