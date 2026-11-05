@@ -1,4 +1,7 @@
 defmodule AtlasTracker.HorizonsClient do
+  @moduledoc """
+  Fetches heliocentric state vectors from JPL Horizons with bounded retries.
+  """
   @base_url "https://ssd.jpl.nasa.gov/api/horizons.api"
 
   def fetch_state_vectors(object, start_time, stop_time, step_size) do
@@ -15,7 +18,19 @@ defmodule AtlasTracker.HorizonsClient do
       "VEC_LABELS" => "YES"
     }
 
-    case Req.get(@base_url, params: params) do
+    options =
+      Keyword.merge(
+        [
+          params: params,
+          retry: :safe_transient,
+          max_retries: 2,
+          receive_timeout: 15_000,
+          connect_options: [timeout: 10_000]
+        ],
+        Application.get_env(:atlas_tracker, :horizons_req_options, [])
+      )
+
+    case Req.get(@base_url, options) do
       {:ok, %Req.Response{status: 200, body: body}} when is_map(body) ->
         {:ok, body}
 
