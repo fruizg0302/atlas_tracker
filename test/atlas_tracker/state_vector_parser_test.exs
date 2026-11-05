@@ -24,9 +24,9 @@ defmodule AtlasTracker.StateVectorParserTest do
     assert length(positions) == 2
 
     [first | _] = positions
-    assert_in_delta first.x, -1.473031599831380e8 / 1.496e8, 0.01
-    assert_in_delta first.y, -2.077370683445942e8 / 1.496e8, 0.01
-    assert_in_delta first.z, 2.175281990054543e7 / 1.496e8, 0.01
+    assert_in_delta first.x, -1.473_031_599_831_380e8 / 1.496e8, 0.01
+    assert_in_delta first.y, -2.077_370_683_445_942e8 / 1.496e8, 0.01
+    assert_in_delta first.z, 2.175_281_990_054_543e7 / 1.496e8, 0.01
   end
 
   test "returns error when no SOE/EOE markers found" do

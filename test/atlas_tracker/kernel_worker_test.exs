@@ -118,10 +118,20 @@ defmodule AtlasTracker.KernelWorkerTest do
     worker = ready_worker()
     assert :ok = KernelWorker.subscribe(self(), worker)
     assert_receive {:kernel_status, ^worker, :ready}
-    subscriber = start_supervised!({Agent, fn -> nil end})
+
+    subscriber =
+      start_supervised!(
+        {Task,
+         fn ->
+           receive do
+             :stop -> :ok
+           end
+         end}
+      )
+
     assert :ok = KernelWorker.subscribe(subscriber, worker)
     ref = Process.monitor(subscriber)
-    stop_supervised!(Agent)
+    stop_supervised!(Task)
     assert_receive {:DOWN, ^ref, :process, ^subscriber, :shutdown}
     _ = :sys.get_state(worker)
     refute Map.has_key?(:sys.get_state(worker).subscribers, subscriber)
