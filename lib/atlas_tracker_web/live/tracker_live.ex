@@ -1,151 +1,303 @@
 defmodule AtlasTrackerWeb.TrackerLive do
   use AtlasTrackerWeb, :live_view
 
-  alias AtlasTracker.StateVectorParser
+  alias AtlasTracker.{KernelWorker, StateVectorParser, TrajectoryCache}
 
-  # Interstellar objects to fetch from JPL Horizons
   @interstellar_objects [
-    %{id: "3i_atlas",   object: "C/2025 N1",  start: "2025-07-01", stop: "2026-06-01", step: "7d", label: "3I/ATLAS"},
-    %{id: "1i_oumuamua", object: "1I",         start: "2017-06-01", stop: "2018-06-01", step: "7d", label: "1I/'Oumuamua"},
-    %{id: "2i_borisov",  object: "2I",         start: "2019-06-01", stop: "2020-06-01", step: "7d", label: "2I/Borisov"}
+    %{
+      id: "3i_atlas",
+      object: "C/2025 N1",
+      start: "2025-07-01",
+      stop: "2026-06-01",
+      step: "7d",
+      label: "3I/ATLAS"
+    },
+    %{
+      id: "1i_oumuamua",
+      object: "1I",
+      start: "2017-06-01",
+      stop: "2018-06-01",
+      step: "7d",
+      label: "1I/'Oumuamua"
+    },
+    %{
+      id: "2i_borisov",
+      object: "2I",
+      start: "2019-06-01",
+      stop: "2020-06-01",
+      step: "7d",
+      label: "2I/Borisov"
+    }
   ]
+  @labels Map.new(@interstellar_objects, &{&1.id, &1.label})
 
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
-      |> assign(:wolfram_input, "40 + 2")
-      |> assign(:wolfram_result, nil)
-      |> assign(:loading, nil)
-      |> assign(:error, nil)
-      |> assign(:trajectories_pending, 0)
+      |> assign(
+        form: to_form(%{"code" => "40 + 2"}, as: :wolfram),
+        wolfram_result: nil,
+        wolfram_loading: false,
+        kernel_worker: nil,
+        kernel_monitor: nil,
+        kernel_reconnect_timer: nil,
+        kernel_status: :unavailable,
+        trajectories_pending: MapSet.new()
+      )
+      |> refresh_kernel()
 
-    # Auto-fetch all interstellar trajectories on connected mount
-    if connected?(socket) do
-      pid = self()
+    socket =
+      if connected?(socket) do
+        pending = MapSet.new(@interstellar_objects, & &1.id)
 
-      for obj <- @interstellar_objects do
-        Task.start(fn ->
-          result =
-            AtlasTracker.HorizonsClient.fetch_state_vectors(
-              obj.object,
-              obj.start,
-              obj.stop,
-              obj.step
-            )
-
-          send(pid, {:trajectory_result, obj.id, obj.label, result})
+        Enum.reduce(@interstellar_objects, assign(socket, :trajectories_pending, pending), fn obj,
+                                                                                              socket ->
+          start_async(socket, {:trajectory, obj.id}, fn ->
+            TrajectoryCache.fetch(obj.object, obj.start, obj.stop, obj.step)
+          end)
         end)
+      else
+        socket
       end
 
-      {:ok, assign(socket, loading: :horizons, trajectories_pending: length(@interstellar_objects))}
-    else
-      {:ok, socket}
-    end
+    {:ok, socket}
   end
 
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="w-full px-6 py-6">
-      <h1 class="text-3xl font-bold mb-6">Atlas Tracker</h1>
+    <Layouts.app flash={@flash} full_width>
+      <div id="tracker" class="w-full space-y-8">
+        <h1 class="text-3xl font-bold tracking-tight">Atlas Tracker</h1>
 
-      <%!-- Full-width 3D Solar System --%>
-      <div class="border rounded-lg p-4 mb-8">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-xl font-semibold">Interstellar Visitors</h2>
-          <%= if @loading == :horizons do %>
-            <span class="text-sm text-gray-400 animate-pulse">Loading trajectories (<%= @trajectories_pending %> remaining)...</span>
-          <% end %>
-        </div>
-        <div id="solar-system" phx-hook="SolarSystem" phx-update="ignore" class="w-full">
-        </div>
-      </div>
+        <section class="rounded-xl border border-slate-500/20 p-4 sm:p-6">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 class="text-xl font-semibold">Interstellar Visitors</h2>
+            <span
+              :if={MapSet.size(@trajectories_pending) > 0}
+              id="trajectory-loading"
+              role="status"
+              class="animate-pulse text-sm text-slate-500"
+            >
+              Loading trajectories ({MapSet.size(@trajectories_pending)} remaining)...
+            </span>
+          </div>
+          <div id="solar-system" phx-hook="SolarSystem" phx-update="ignore" class="w-full"></div>
+        </section>
 
-      <%!-- Wolfram Panel (below) --%>
-      <div class="max-w-2xl border rounded-lg p-6">
-        <h2 class="text-xl font-semibold mb-4">Wolfram Kernel</h2>
-        <form phx-submit="evaluate_wolfram" class="mb-4">
-          <label class="block text-sm text-gray-600 mb-2">Wolfram expression:</label>
-          <input
-            type="text"
-            name="code"
-            value={@wolfram_input}
-            class="w-full border rounded px-3 py-2 mb-2 font-mono text-sm"
-          />
-          <button
-            type="submit"
-            disabled={@loading == :wolfram}
-            class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50"
+        <section class="max-w-2xl rounded-xl border border-slate-500/20 p-6">
+          <h2 class="mb-4 text-xl font-semibold">Wolfram Kernel</h2>
+          <div
+            :if={@kernel_status == :unavailable}
+            id="kernel-unavailable"
+            role="status"
+            class="mb-5 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm"
           >
-            <%= if @loading == :wolfram, do: "Evaluating...", else: "Evaluate" %>
-          </button>
-        </form>
+            <p>Wolfram kernel unavailable, the rest of the app works without it.</p>
+            <button
+              id="check-kernel"
+              type="button"
+              phx-click="check_kernel"
+              class="mt-3 rounded-md border border-amber-500/40 px-3 py-1.5 font-medium transition hover:bg-amber-400/15"
+            >
+              Check again
+            </button>
+          </div>
+          <p
+            :if={@kernel_status == :warming}
+            id="kernel-warming"
+            role="status"
+            class="mb-4 text-sm text-slate-500"
+          >
+            Kernel starting…
+          </p>
 
-        <%= if @wolfram_result do %>
-          <pre class="mt-4 p-4 bg-gray-50 rounded text-xs overflow-auto max-h-96"><%= @wolfram_result %></pre>
-        <% end %>
+          <.form for={@form} id="wolfram-form" phx-submit="evaluate_wolfram" class="space-y-3">
+            <.input
+              field={@form[:code]}
+              id="wolfram-code"
+              label="Wolfram expression"
+              type="text"
+              disabled={@kernel_status != :ready or @wolfram_loading}
+              class="w-full rounded-lg border border-slate-500/30 bg-transparent px-3 py-2 font-mono text-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <button
+              id="wolfram-submit"
+              type="submit"
+              disabled={@kernel_status != :ready or @wolfram_loading}
+              class="rounded-lg bg-emerald-600 px-4 py-2 font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {if @wolfram_loading, do: "Evaluating...", else: "Evaluate"}
+            </button>
+          </.form>
+          <pre
+            :if={@wolfram_result}
+            id="wolfram-result"
+            class="mt-4 max-h-96 overflow-auto rounded-lg bg-slate-500/10 p-4 text-xs"
+          >{@wolfram_result}</pre>
+        </section>
       </div>
-
-      <%= if @error do %>
-        <div class="mt-6 p-4 bg-red-50 border border-red-200 rounded text-red-800">
-          <%= @error %>
-        </div>
-      <% end %>
-    </div>
+    </Layouts.app>
     """
   end
 
   @impl true
-  def handle_event("evaluate_wolfram", %{"code" => code}, socket) do
-    pid = self()
-    socket = socket |> assign(:loading, :wolfram) |> assign(:wolfram_input, code)
+  def handle_event("check_kernel", _, socket) do
+    {:noreply, refresh_kernel(socket)}
+  end
 
-    Task.start(fn ->
-      result = AtlasTracker.KernelWorker.evaluate(AtlasTracker.KernelWorker, code)
-      send(pid, {:wolfram_result, result})
-    end)
+  def handle_event("evaluate_wolfram", _, %{assigns: %{wolfram_loading: true}} = socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("evaluate_wolfram", %{"wolfram" => %{"code" => code}}, socket) do
+    socket = assign(socket, :form, to_form(%{"code" => code}, as: :wolfram))
+
+    socket =
+      case socket.assigns.kernel_status do
+        :ready ->
+          worker = socket.assigns.kernel_worker
+
+          socket
+          |> assign(:wolfram_loading, true)
+          |> start_async(:wolfram_eval, fn -> KernelWorker.evaluate(worker, code) end)
+
+        :warming ->
+          put_flash(socket, :info, "Wolfram kernel is still starting. Please try again shortly.")
+
+        :unavailable ->
+          put_flash(
+            socket,
+            :error,
+            "Wolfram kernel unavailable. Trajectories still work without it."
+          )
+      end
 
     {:noreply, socket}
   end
 
   @impl true
-  def handle_info({:trajectory_result, id, label, {:ok, %{"result" => result_text}}}, socket) do
-    pending = socket.assigns.trajectories_pending - 1
-
+  def handle_async({:trajectory, id}, outcome, socket) do
     socket =
-      case StateVectorParser.parse(result_text) do
-        {:ok, positions} ->
-          socket
-          |> push_event("trajectory_data", %{id: id, label: label, positions: positions})
+      case outcome do
+        {:ok, {:ok, %{"result" => text}}} when is_binary(text) ->
+          case StateVectorParser.parse(text) do
+            {:ok, positions} ->
+              push_event(socket, "trajectory_data", %{
+                id: id,
+                label: Map.fetch!(@labels, id),
+                positions: positions
+              })
 
-        {:error, _reason} ->
-          assign(socket, :error, "Failed to parse #{label} trajectory data")
+            {:error, reason} ->
+              trajectory_error(socket, id, reason)
+          end
+
+        {:ok, {:error, reason}} ->
+          trajectory_error(socket, id, reason)
+
+        {:exit, reason} ->
+          trajectory_error(socket, id, reason)
+
+        _ ->
+          trajectory_error(socket, id, :invalid_response)
       end
 
-    loading = if pending <= 0, do: nil, else: :horizons
-    {:noreply, assign(socket, loading: loading, trajectories_pending: pending)}
+    {:noreply, update(socket, :trajectories_pending, &MapSet.delete(&1, id))}
   end
 
-  def handle_info({:trajectory_result, _id, label, {:error, reason}}, socket) do
-    pending = socket.assigns.trajectories_pending - 1
-    loading = if pending <= 0, do: nil, else: :horizons
+  def handle_async(:wolfram_eval, {:ok, {:ok, result}}, socket) do
+    {:noreply,
+     assign(socket, wolfram_result: Jason.encode!(result, pretty: true), wolfram_loading: false)}
+  end
+
+  def handle_async(:wolfram_eval, {:ok, {:error, reason}}, socket)
+      when reason in [:busy, :not_ready] do
+    {:noreply,
+     socket
+     |> assign(:wolfram_loading, false)
+     |> put_flash(:info, "Wolfram kernel is busy or still starting. Please try again shortly.")}
+  end
+
+  def handle_async(:wolfram_eval, outcome, socket) do
+    reason =
+      case outcome do
+        {:ok, {:error, reason}} -> reason
+        {:exit, reason} -> reason
+      end
 
     {:noreply,
      socket
-     |> assign(:error, "Horizons error for #{label}: #{inspect(reason)}")
-     |> assign(loading: loading, trajectories_pending: pending)}
+     |> assign(:wolfram_loading, false)
+     |> put_flash(:error, "Wolfram error: #{inspect(reason)}")}
   end
 
-  def handle_info({:wolfram_result, {:ok, result}}, socket) do
-    formatted = Jason.encode!(result, pretty: true)
-    {:noreply, socket |> assign(:wolfram_result, formatted) |> assign(:loading, nil)}
+  @impl true
+  def handle_info({:kernel_status, worker, status}, %{assigns: %{kernel_worker: worker}} = socket) do
+    {:noreply, assign(socket, :kernel_status, status)}
   end
 
-  def handle_info({:wolfram_result, {:error, reason}}, socket) do
-    {:noreply,
-     socket
-     |> assign(:error, "Wolfram error: #{inspect(reason)}")
-     |> assign(:loading, nil)}
+  def handle_info({:kernel_status, _, _}, socket), do: {:noreply, socket}
+
+  def handle_info({:DOWN, ref, :process, _, _}, %{assigns: %{kernel_monitor: ref}} = socket) do
+    {:noreply, refresh_kernel(socket)}
+  end
+
+  def handle_info({:DOWN, _, :process, _, _}, socket), do: {:noreply, socket}
+
+  def handle_info(:reconnect_kernel, socket), do: {:noreply, refresh_kernel(socket)}
+
+  defp refresh_kernel(socket) do
+    socket = detach_kernel(socket)
+
+    case Process.whereis(KernelWorker) do
+      nil ->
+        reconnect_later(socket)
+
+      worker ->
+        ref = if connected?(socket), do: Process.monitor(worker)
+        socket = assign(socket, kernel_worker: worker, kernel_monitor: ref)
+
+        try do
+          if connected?(socket), do: KernelWorker.subscribe(self(), worker)
+          assign(socket, :kernel_status, KernelWorker.status(worker))
+        catch
+          :exit, _ -> socket |> detach_kernel() |> reconnect_later()
+        end
+    end
+  end
+
+  defp detach_kernel(socket) do
+    if socket.assigns.kernel_monitor do
+      Process.demonitor(socket.assigns.kernel_monitor, [:flush])
+    end
+
+    if socket.assigns.kernel_reconnect_timer do
+      Process.cancel_timer(socket.assigns.kernel_reconnect_timer)
+    end
+
+    assign(socket,
+      kernel_worker: nil,
+      kernel_monitor: nil,
+      kernel_reconnect_timer: nil,
+      kernel_status: :unavailable
+    )
+  end
+
+  defp reconnect_later(socket) do
+    if connected?(socket) do
+      assign(socket, :kernel_reconnect_timer, Process.send_after(self(), :reconnect_kernel, 100))
+    else
+      socket
+    end
+  end
+
+  defp trajectory_error(socket, id, reason) do
+    label = Map.fetch!(@labels, id)
+
+    socket
+    |> put_flash(:error, "Horizons error for #{label}: #{inspect(reason)}")
+    |> push_event("trajectory_error", %{id: id, label: label})
   end
 end

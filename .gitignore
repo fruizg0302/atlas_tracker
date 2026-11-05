@@ -10,6 +10,9 @@
 # The directory where third-party dependencies are downloaded.
 /deps/
 
+# Dialyzer's generated lookup tables.
+/priv/plts/
+
 # Where 3rd-party dependencies like ExDoc output generated docs.
 /doc/
 

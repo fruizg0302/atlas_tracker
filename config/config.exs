@@ -7,9 +7,7 @@
 # General application configuration
 import Config
 
-config :atlas_tracker,
-  generators: [timestamp_type: :utc_datetime],
-  wolfram_kernel_path: "/Volumes/MacintoshEDD/Applications/Wolfram.app/Contents/MacOS/WolframKernel"
+config :atlas_tracker, generators: [timestamp_type: :utc_datetime]
 
 # Configure the endpoint
 config :atlas_tracker, AtlasTrackerWeb.Endpoint,

@@ -5,7 +5,8 @@ defmodule AtlasTracker.MixProject do
     [
       app: :atlas_tracker,
       version: "0.1.0",
-      elixir: "~> 1.15",
+      elixir: "~> 1.18",
+      dialyzer: [plt_file: {:no_warn, "priv/plts/atlas_tracker.plt"}],
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
@@ -60,7 +61,9 @@ defmodule AtlasTracker.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
-      {:req, "~> 0.5"}
+      {:req, "~> 0.5"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 
@@ -80,7 +83,13 @@ defmodule AtlasTracker.MixProject do
         "esbuild atlas_tracker --minify",
         "phx.digest"
       ],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "credo",
+        "test"
+      ]
     ]
   end
 end
