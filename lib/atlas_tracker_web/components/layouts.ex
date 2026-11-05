@@ -27,6 +27,8 @@ defmodule AtlasTrackerWeb.Layouts do
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
 
+  attr :full_width, :boolean, default: false, doc: "allow content to fill the main container"
+
   attr :current_scope, :map,
     default: nil,
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
@@ -63,7 +65,7 @@ defmodule AtlasTrackerWeb.Layouts do
     </header>
 
     <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
+      <div id="app-content" class={["mx-auto space-y-4", !@full_width && "max-w-2xl"]}>
         {render_slot(@inner_block)}
       </div>
     </main>
