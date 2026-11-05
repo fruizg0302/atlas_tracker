@@ -12,6 +12,7 @@ defmodule AtlasTracker.Application do
       {AtlasTracker.KernelWorker, name: AtlasTracker.KernelWorker},
       {DNSCluster, query: Application.get_env(:atlas_tracker, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: AtlasTracker.PubSub},
+      AtlasTracker.TrajectoryCache,
       AtlasTrackerWeb.Endpoint
     ]
 
