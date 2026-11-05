@@ -1,5 +1,17 @@
 import Config
 
+if path = System.get_env("WOLFRAM_KERNEL_PATH") do
+  config :atlas_tracker, :wolfram_kernel_path, path
+end
+
+if retry = System.get_env("KERNEL_RETRY_MS") do
+  config :atlas_tracker, :kernel_retry_ms, String.to_integer(retry)
+end
+
+if ttl = System.get_env("TRAJECTORY_CACHE_TTL_MS") do
+  config :atlas_tracker, :trajectory_cache_ttl_ms, String.to_integer(ttl)
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
