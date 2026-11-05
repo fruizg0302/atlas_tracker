@@ -1,0 +1,30 @@
+# Source control and local execution artifacts
+.git
+.worktrees
+.superpowers
+.github
+.elixir_ls
+.credo.exs
+cover
+doc
+docs
+test
+tmp
+gameplan.md
+
+# Dependencies and generated build output
+_build
+deps
+assets/node_modules
+priv/static/assets
+priv/static/cache_manifest.json
+priv/plts
+*.ez
+erl_crash.dump
+
+# Never send local credentials to the build daemon
+.env
+.env.*
+*.pem
+*.key
+*.secret*
