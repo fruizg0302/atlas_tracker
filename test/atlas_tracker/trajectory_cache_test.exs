@@ -6,13 +6,14 @@ defmodule AtlasTracker.TrajectoryCacheTest do
   @moduletag :capture_log
   @table :trajectory_cache_unit_table
   @key {"object", "start", "stop", "7d"}
+  @body %{"result" => File.read!(Path.expand("../fixtures/horizons_success.txt", __DIR__))}
 
   setup do
     counter = start_supervised!({Agent, fn -> 0 end})
     %{counter: counter}
   end
 
-  defp cache(counter, opts \\ [], fun \\ fn _, _, _, _ -> {:ok, %{"result" => "body"}} end) do
+  defp cache(counter, opts \\ [], fun \\ fn _, _, _, _ -> {:ok, @body} end) do
     fetch = fn a, b, c, d ->
       Agent.update(counter, &(&1 + 1))
       fun.(a, b, c, d)
@@ -34,8 +35,8 @@ defmodule AtlasTracker.TrajectoryCacheTest do
 
   test "miss then hit", %{counter: counter} do
     {_, opts} = cache(counter)
-    assert {:ok, %{"result" => "body"}} = fetch(opts)
-    assert {:ok, %{"result" => "body"}} = fetch(opts)
+    assert {:ok, @body} = fetch(opts)
+    assert {:ok, @body} = fetch(opts)
     assert Agent.get(counter, & &1) == 1
   end
 
@@ -119,6 +120,28 @@ defmodule AtlasTracker.TrajectoryCacheTest do
     assert {:error, :bad_gateway} = fetch(opts)
     assert {:error, :bad_gateway} = fetch(opts)
     assert Agent.get(counter, & &1) == 2
+  end
+
+  for {name, body} <- [
+        {"application error", %{"error" => "temporarily unavailable"}},
+        {"missing result", %{}},
+        {"non-string result", %{"result" => nil}},
+        {"no ephemeris", %{"result" => "No matches found"}},
+        {"empty ephemeris", %{"result" => "$$SOE\n$$EOE"}}
+      ] do
+    test "#{name} does not prevent a recovered response from being cached", %{counter: counter} do
+      invalid = unquote(Macro.escape(body))
+
+      {_, opts} =
+        cache(counter, [], fn _, _, _, _ ->
+          {:ok, if(Agent.get(counter, & &1) == 1, do: invalid, else: @body)}
+        end)
+
+      assert {:ok, ^invalid} = fetch(opts)
+      assert {:ok, @body} = fetch(opts)
+      assert {:ok, @body} = fetch(opts)
+      assert Agent.get(counter, & &1) == 2
+    end
   end
 
   test "fetch crash releases all waiters and allows retry", %{counter: counter} do

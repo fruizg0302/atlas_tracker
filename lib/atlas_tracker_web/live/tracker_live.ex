@@ -33,22 +33,22 @@ defmodule AtlasTrackerWeb.TrackerLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    worker = Process.whereis(KernelWorker)
-
     socket =
       socket
       |> assign(
         form: to_form(%{"code" => "40 + 2"}, as: :wolfram),
         wolfram_result: nil,
         wolfram_loading: false,
-        kernel_worker: worker,
-        kernel_status: KernelWorker.status(worker),
+        kernel_worker: nil,
+        kernel_monitor: nil,
+        kernel_reconnect_timer: nil,
+        kernel_status: :unavailable,
         trajectories_pending: MapSet.new()
       )
+      |> refresh_kernel()
 
     socket =
       if connected?(socket) do
-        KernelWorker.subscribe(self(), worker)
         pending = MapSet.new(@interstellar_objects, & &1.id)
 
         Enum.reduce(@interstellar_objects, assign(socket, :trajectories_pending, pending), fn obj,
@@ -144,7 +144,7 @@ defmodule AtlasTrackerWeb.TrackerLive do
 
   @impl true
   def handle_event("check_kernel", _, socket) do
-    {:noreply, assign(socket, :kernel_status, KernelWorker.status(socket.assigns.kernel_worker))}
+    {:noreply, refresh_kernel(socket)}
   end
 
   def handle_event("evaluate_wolfram", _, %{assigns: %{wolfram_loading: true}} = socket) do
@@ -239,6 +239,59 @@ defmodule AtlasTrackerWeb.TrackerLive do
   end
 
   def handle_info({:kernel_status, _, _}, socket), do: {:noreply, socket}
+
+  def handle_info({:DOWN, ref, :process, _, _}, %{assigns: %{kernel_monitor: ref}} = socket) do
+    {:noreply, refresh_kernel(socket)}
+  end
+
+  def handle_info({:DOWN, _, :process, _, _}, socket), do: {:noreply, socket}
+
+  def handle_info(:reconnect_kernel, socket), do: {:noreply, refresh_kernel(socket)}
+
+  defp refresh_kernel(socket) do
+    socket = detach_kernel(socket)
+
+    case Process.whereis(KernelWorker) do
+      nil ->
+        reconnect_later(socket)
+
+      worker ->
+        ref = if connected?(socket), do: Process.monitor(worker)
+        socket = assign(socket, kernel_worker: worker, kernel_monitor: ref)
+
+        try do
+          if connected?(socket), do: KernelWorker.subscribe(self(), worker)
+          assign(socket, :kernel_status, KernelWorker.status(worker))
+        catch
+          :exit, _ -> socket |> detach_kernel() |> reconnect_later()
+        end
+    end
+  end
+
+  defp detach_kernel(socket) do
+    if socket.assigns.kernel_monitor do
+      Process.demonitor(socket.assigns.kernel_monitor, [:flush])
+    end
+
+    if socket.assigns.kernel_reconnect_timer do
+      Process.cancel_timer(socket.assigns.kernel_reconnect_timer)
+    end
+
+    assign(socket,
+      kernel_worker: nil,
+      kernel_monitor: nil,
+      kernel_reconnect_timer: nil,
+      kernel_status: :unavailable
+    )
+  end
+
+  defp reconnect_later(socket) do
+    if connected?(socket) do
+      assign(socket, :kernel_reconnect_timer, Process.send_after(self(), :reconnect_kernel, 100))
+    else
+      socket
+    end
+  end
 
   defp trajectory_error(socket, id, reason) do
     label = Map.fetch!(@labels, id)

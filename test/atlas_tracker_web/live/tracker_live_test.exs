@@ -14,6 +14,17 @@ defmodule AtlasTrackerWeb.TrackerLiveTest do
     previous = Application.fetch_env(:atlas_tracker, :horizons_req_options)
     stub(&Req.Test.json(&1, %{"result" => @fixture}))
 
+    application_worker = Process.whereis(KernelWorker)
+    Process.unregister(KernelWorker)
+
+    on_exit(fn -> Process.register(application_worker, KernelWorker) end)
+
+    worker =
+      start_supervised!(
+        {KernelWorker,
+         name: KernelWorker, kernel_path: "/nonexistent/wolfram/kernel", retry_ms: 60_000}
+      )
+
     on_exit(fn ->
       case previous do
         {:ok, value} -> Application.put_env(:atlas_tracker, :horizons_req_options, value)
@@ -21,7 +32,7 @@ defmodule AtlasTrackerWeb.TrackerLiveTest do
       end
     end)
 
-    :ok
+    %{worker: worker}
   end
 
   defp stub(fun) do
@@ -124,6 +135,52 @@ defmodule AtlasTrackerWeb.TrackerLiveTest do
     assert has_element?(view, "#wolfram-submit:not([disabled])")
     send(view.pid, {:kernel_status, self(), :unavailable})
     refute has_element?(view, "#kernel-unavailable")
+  end
+
+  test "worker termination disables evaluation and check again survives absence", %{conn: conn} do
+    stop_supervised!(KernelWorker)
+    worker = start_ready_kernel()
+    view = open(conn)
+    assert has_element?(view, "#wolfram-submit:not([disabled])")
+
+    ref = Process.monitor(worker)
+    stop_supervised!(KernelWorker)
+    assert_receive {:DOWN, ^ref, :process, ^worker, _}
+    assert has_element?(view, "#kernel-unavailable")
+    assert has_element?(view, "#wolfram-submit[disabled]")
+    view |> element("#check-kernel") |> render_click()
+    assert has_element?(view, "#kernel-unavailable")
+
+    replacement = start_ready_kernel()
+    send(view.pid, :reconnect_kernel)
+    assert has_element?(view, "#wolfram-submit:not([disabled])")
+    send(view.pid, {:kernel_status, worker, :unavailable})
+    refute has_element?(view, "#kernel-unavailable")
+    send(view.pid, {:kernel_status, replacement, :warming})
+    assert has_element?(view, "#kernel-warming")
+  end
+
+  test "mount tolerates an absent worker and reconnects when it starts", %{conn: conn} do
+    stop_supervised!(KernelWorker)
+    view = open(conn)
+    assert has_element?(view, "#kernel-unavailable")
+    view |> element("#check-kernel") |> render_click()
+    start_ready_kernel()
+    send(view.pid, :reconnect_kernel)
+    assert has_element?(view, "#wolfram-submit:not([disabled])")
+  end
+
+  defp start_ready_kernel do
+    worker =
+      start_supervised!(
+        {KernelWorker,
+         name: KernelWorker,
+         kernel_path: Path.expand("../../support/fake_kernel.sh", __DIR__),
+         notify: self()}
+      )
+
+    assert_receive {:kernel_status, ^worker, :ready}, 2_000
+    worker
   end
 
   defp socket(assigns \\ %{}) do

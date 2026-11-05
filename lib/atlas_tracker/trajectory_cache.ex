@@ -4,7 +4,7 @@ defmodule AtlasTracker.TrajectoryCache do
   """
   use GenServer
 
-  alias AtlasTracker.HorizonsClient
+  alias AtlasTracker.{HorizonsClient, StateVectorParser}
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -102,13 +102,10 @@ defmodule AtlasTracker.TrajectoryCache do
     {waiters, pending} = Map.pop(state.pending, job.key)
     now = System.monotonic_time(:millisecond)
 
-    case result do
-      {:ok, body} ->
-        :ets.select_delete(state.table, [{{:_, :_, :"$1"}, [{:"=<", :"$1", now}], [true]}])
-        :ets.insert(state.table, {job.key, body, now + state.ttl_ms})
-
-      {:error, _} ->
-        :ok
+    if cacheable?(result) do
+      {:ok, body} = result
+      :ets.select_delete(state.table, [{{:_, :_, :"$1"}, [{:"=<", :"$1", now}], [true]}])
+      :ets.insert(state.table, {job.key, body, now + state.ttl_ms})
     end
 
     Enum.each(waiters, &GenServer.reply(&1, result))
@@ -121,6 +118,13 @@ defmodule AtlasTracker.TrajectoryCache do
 
     %{state | jobs: jobs, pending: pending}
   end
+
+  defp cacheable?({:ok, %{"result" => text} = body})
+       when is_binary(text) and not is_map_key(body, "error") do
+    match?({:ok, [_ | _]}, StateVectorParser.parse(text))
+  end
+
+  defp cacheable?(_), do: false
 
   defp lookup(table, key) do
     now = System.monotonic_time(:millisecond)
